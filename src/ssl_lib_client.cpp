@@ -286,15 +286,16 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
 
     mbedtls_ssl_conf_rng(&ssl_client->ssl_conf, mbedtls_ctr_drbg_random, &ssl_client->drbg_ctx);
 
+    // Set mbedTLS read timeout for f_recv_timeout in milliseconds
+    // Must be set BEFORE mbedtls_ssl_setup() which copies the config
+    mbedtls_ssl_conf_read_timeout(&ssl_client->ssl_conf, ssl_client->handshake_timeout);
+
     if ((ret = mbedtls_ssl_setup(&ssl_client->ssl_ctx, &ssl_client->ssl_conf)) != 0) {
         return handle_error(ret);
     }
 
     log_v("Setting up IO callbacks...");
     mbedtls_ssl_set_bio(&ssl_client->ssl_ctx, ssl_client->client, client_net_send, NULL, client_net_recv_timeout);
-
-    // Set mbedTLS read timeout for f_recv_timeout in milliseconds
-    mbedtls_ssl_conf_read_timeout(&ssl_client->ssl_conf, ssl_client->handshake_timeout);
 
     log_v("Performing the SSL/TLS handshake...");
     unsigned long handshake_start_time=millis();
