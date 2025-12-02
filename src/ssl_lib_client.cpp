@@ -394,38 +394,35 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     log_d("Writing SSL (%d bytes)...", len);
     int ret = -1;
 
-    // Timeout for write operations - fail fast to trigger reconnection
-    unsigned long start        = millis();
-    unsigned long sendTimeout  = 5000;  // 5 seconds
+    // Strict 10-second timeout for the SSL write operation
+    unsigned long start = millis();
+    unsigned long sendTimeout = 10000; 
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
-
-        // NEW: handle the "0 bytes written" case explicitly
+        
+        // FIX: If mbedtls returns 0, the underlying connection is closed or stalled.
+        // Do not retry. Fail immediately to trigger reconnect logic.
         if (ret == 0) {
-            log_w("send_ssl_data(): mbedtls_ssl_write returned 0 (connection closed?)");
-            // propagate an error so upper layers can reconnect
-            return handle_error(-1);  // arbitrary non-zero error code
+            log_e("SSL Write returned 0 (Connection Closed/Stalled)");
+            return -1; 
         }
 
-        // Existing error handling for real mbedTLS errors
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ &&
-            ret != MBEDTLS_ERR_SSL_WANT_WRITE &&
-            ret < 0) {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret < 0) {
             log_v("Handling error %d", ret);
             return handle_error(ret);
         }
 
-        // NEW: safety timeout for WANT_READ/WANT_WRITE loops
+        // FIX: Check timeout
         if (millis() - start > sendTimeout) {
-            log_w("send_ssl_data(): timed out after %lu ms waiting for write", millis() - start);
-            return handle_error(-1);
+            log_e("SSL Write Timed Out (>10s) - Force Close");
+            return -1; // Return error to trigger reconnection
         }
 
-        // wait for space to become available
-        vTaskDelay(2);   // same as before (2 RTOS ticks)
+        // Feed watchdog during wait loops
+        esp_task_wdt_reset();
+        vTaskDelay(10); // 10 ticks delay
     }
 
-    // Success: ret > 0
     return ret;
 }
 

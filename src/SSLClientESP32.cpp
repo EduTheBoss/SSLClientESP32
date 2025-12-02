@@ -32,7 +32,7 @@ SSLClientESP32::SSLClientESP32()
 
     sslclient = new SSLClientLib::sslclient_context;
     SSLClientLib::ssl_init(sslclient, nullptr);
-    sslclient->handshake_timeout = 60000; // 60s - reduced to prevent WDT timeout
+    sslclient->handshake_timeout = 120000;
     _use_insecure = false;
     _CA_cert = NULL;
     _cert = NULL;
@@ -49,7 +49,7 @@ SSLClientESP32::SSLClientESP32(Client* client)
 
     sslclient = new SSLClientLib::sslclient_context;
     SSLClientLib::ssl_init(sslclient, client);
-    sslclient->handshake_timeout = 60000; // 60s - reduced to prevent WDT timeout
+    sslclient->handshake_timeout = 120000;
     _use_insecure = false;
     _CA_cert = NULL;
     _cert = NULL;
