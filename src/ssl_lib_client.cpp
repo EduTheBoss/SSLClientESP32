@@ -13,6 +13,7 @@
 #include <mbedtls/oid.h>
 #include <algorithm>
 #include <string>
+#include <esp_task_wdt.h>
 #include "ssl_lib_client.h"
 #include "ssl_lib_crt_bundle.h"
 
