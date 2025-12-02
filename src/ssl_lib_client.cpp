@@ -83,21 +83,13 @@ int client_net_recv_timeout( void *ctx, unsigned char *buf,
         return -1;
     }
     unsigned long start = millis();
-    const uint32_t tms = start + timeout;
-    int pending = client->available();
-    
-    while ((millis() < tms) && (pending < (int)len) && timeout > 0) {
-        if (!client->connected()) {
-            return MBEDTLS_ERR_NET_CONN_RESET;
-        }
-        pending = client->available();
-        delay(1);
-    }
-    
-    // If nothing is available and timeout expired, return 0
-    if (pending == 0) {
-        return 0;  // mbedTLS interprets 0 from f_recv_timeout as "timeout"
-    }
+    unsigned long tms = start + timeout;
+    do {
+        int pending = client->available();
+        if (pending < len && timeout > 0) {
+            delay(1);
+        } else break;
+    } while (millis() < tms);
     
     int result = client->read(buf, len);
     
@@ -300,9 +292,6 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
 
     log_v("Setting up IO callbacks...");
     mbedtls_ssl_set_bio(&ssl_client->ssl_ctx, ssl_client->client, client_net_send, NULL, client_net_recv_timeout);
-
-    // Set mbedTLS read timeout for f_recv_timeout in milliseconds
-    mbedtls_ssl_conf_read_timeout(&ssl_client->ssl_conf, ssl_client->handshake_timeout);
 
     log_v("Performing the SSL/TLS handshake...");
     unsigned long handshake_start_time=millis();
