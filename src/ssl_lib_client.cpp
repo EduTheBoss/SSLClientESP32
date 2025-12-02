@@ -391,19 +391,40 @@ int data_to_read(sslclient_context *ssl_client)
 
 int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len)
 {
-    log_d("Writing SSL (%d bytes)...", len);  //for low level debug
+    log_d("Writing SSL (%d bytes)...", (int)len);  // for low level debug
+
     int ret = -1;
+    // How long we are willing to spin on WANT_READ/WANT_WRITE
+    const uint32_t WRITE_TIMEOUT_MS = 10000;  // 10 seconds, adjust if you like
+    uint32_t start = millis();
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
+
+        // 1) Treat 0 as "connection closed"
+        if (ret == 0) {
+            log_w("mbedtls_ssl_write returned 0 (connection closed?)");
+            return -1;
+        }
+
+        // 2) Any real error → bubble up
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret < 0) {
-            log_v("Handling error %d", ret); //for low level debug
+            log_v("Handling error %d", ret); // for low level debug
             return handle_error(ret);
         }
 
-        //wait for space to become available
+        // 3) Our own timeout to avoid infinite loop → WDT reset
+        if ((millis() - start) > WRITE_TIMEOUT_MS) {
+            log_e("mbedtls_ssl_write timeout after %lu ms",
+                  (unsigned long)(millis() - start));
+            // Just return an error; SSLClientESP32::write() will call stop()
+            return -1;
+        }
+
+        // Wait a bit then try again
         vTaskDelay(2);
     }
 
+    // Success, ret = number of bytes actually written
     return ret;
 }
 
