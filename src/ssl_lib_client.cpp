@@ -395,14 +395,12 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     log_d("Writing SSL (%d bytes)...", len);
     int ret = -1;
 
-    // Strict 10-second timeout for the SSL write operation
     unsigned long start = millis();
     unsigned long sendTimeout = 10000; 
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
         
-        // FIX: If mbedtls returns 0, the underlying connection is closed or stalled.
-        // Do not retry. Fail immediately to trigger reconnect logic.
+        // The check that catches the 2.7h bug
         if (ret == 0) {
             log_e("SSL Write returned 0 (Connection Closed/Stalled)");
             return -1; 
@@ -413,15 +411,13 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
             return handle_error(ret);
         }
 
-        // FIX: Check timeout
         if (millis() - start > sendTimeout) {
             log_e("SSL Write Timed Out (>10s) - Force Close");
-            return -1; // Return error to trigger reconnection
+            return -1;
         }
 
-        // Feed watchdog during wait loops
         esp_task_wdt_reset();
-        vTaskDelay(10); // 10 ticks delay
+        vTaskDelay(10); 
     }
 
     return ret;
