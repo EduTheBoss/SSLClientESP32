@@ -188,6 +188,17 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
         return handle_error(ret);
     }
 
+    // [FIX] REDUCE MEMORY USAGE
+    // Force mbedTLS to use 4KB buffers instead of default 16KB.
+    // This prevents allocation failures when heap is fragmented (10000s issue).
+    // AWS IoT supports this extension.
+    #ifdef MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+    if ((ret = mbedtls_ssl_conf_max_frag_len(&ssl_client->ssl_conf, MBEDTLS_SSL_MAX_FRAG_LEN_4096)) != 0) {
+        log_e("Failed to set Max Fragment Length to 4096");
+        return handle_error(ret);
+    }
+    #endif
+
     if (alpn_protos != NULL) {
         log_v("Setting ALPN protocols");
         if ((ret = mbedtls_ssl_conf_alpn_protocols(&ssl_client->ssl_conf, alpn_protos) ) != 0) {
@@ -534,6 +545,10 @@ bool get_peer_fingerprint(sslclient_context *ssl_client, uint8_t sha256[32])
     mbedtls_sha256_starts(&sha256_ctx, false);
     mbedtls_sha256_update(&sha256_ctx, crt->raw.p, crt->raw.len);
     mbedtls_sha256_finish(&sha256_ctx, sha256);
+    
+    // [FIX] MEMORY LEAK FIX
+    // The original library forgot to free the context
+    mbedtls_sha256_free(&sha256_ctx); 
 
     return true;
 }
