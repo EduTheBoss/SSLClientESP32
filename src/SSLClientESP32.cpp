@@ -30,7 +30,8 @@ SSLClientESP32::SSLClientESP32()
 {
     _connected = false;
 
-    sslclient = new SSLClientLib::sslclient_context;
+    // [FIX] Use calloc to zero-initialize memory (prevents garbage in flags)
+    sslclient = (SSLClientLib::sslclient_context*)calloc(1, sizeof(SSLClientLib::sslclient_context));
     SSLClientLib::ssl_init(sslclient, nullptr);
     sslclient->handshake_timeout = 120000;
     _use_insecure = false;
@@ -47,7 +48,8 @@ SSLClientESP32::SSLClientESP32(Client* client)
 {
     _connected = false;
 
-    sslclient = new SSLClientLib::sslclient_context;
+    // [FIX] Use calloc to zero-initialize memory (prevents garbage in flags)
+    sslclient = (SSLClientLib::sslclient_context*)calloc(1, sizeof(SSLClientLib::sslclient_context));
     SSLClientLib::ssl_init(sslclient, client);
     sslclient->handshake_timeout = 120000;
     _use_insecure = false;
