@@ -201,11 +201,15 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
 
     log_v("Setting up the SSL/TLS structure...");
 
-    if ((ret = mbedtls_ssl_config_defaults(&ssl_client->ssl_conf,
-                                           MBEDTLS_SSL_IS_CLIENT,
-                                           MBEDTLS_SSL_TRANSPORT_STREAM,
-                                           MBEDTLS_SSL_PRESET_DEFAULT)) != 0) {
-        return handle_error(ret);
+    // [FIX] Only set config defaults on first connection (persistent config reuse)
+    if (!ssl_client->config_setup) {
+        if ((ret = mbedtls_ssl_config_defaults(&ssl_client->ssl_conf,
+                                               MBEDTLS_SSL_IS_CLIENT,
+                                               MBEDTLS_SSL_TRANSPORT_STREAM,
+                                               MBEDTLS_SSL_PRESET_DEFAULT)) != 0) {
+            return handle_error(ret);
+        }
+        ssl_client->config_setup = true;
     }
 
     // [FIX] REDUCE MEMORY USAGE
@@ -234,7 +238,7 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
         log_d("WARNING: Skipping SSL Verification. INSECURE!");
     } else if (rootCABuff != NULL) {
         log_v("Loading CA cert");
-        mbedtls_x509_crt_init(&ssl_client->ca_cert);
+        // [FIX] Don't re-init, already initialized in stop_ssl_socket or ssl_init
         mbedtls_ssl_conf_authmode(&ssl_client->ssl_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
         ret = mbedtls_x509_crt_parse(&ssl_client->ca_cert, (const unsigned char *)rootCABuff, strlen(rootCABuff) + 1);
         mbedtls_ssl_conf_ca_chain(&ssl_client->ssl_conf, &ssl_client->ca_cert, NULL);
@@ -286,8 +290,7 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
     }
 
     if (!insecure && cli_cert != NULL && cli_key != NULL) {
-        mbedtls_x509_crt_init(&ssl_client->client_cert);
-        mbedtls_pk_init(&ssl_client->client_key);
+        // [FIX] Don't re-init, already initialized in stop_ssl_socket or ssl_init
 
         log_v("Loading CRT cert");
 
