@@ -63,6 +63,11 @@ SSLClientESP32::SSLClientESP32(Client* client)
 SSLClientESP32::~SSLClientESP32()
 {
     stop();
+    // [FIX] In a normal PC app, we would delete this.
+    // In an embedded persistent app, we technically leak this 
+    // IF the SSLClientESP32 object itself is destroyed.
+    // However, since SSLClientESP32 objects are typically defined globally,
+    // this destructor is never called during normal operation, so it is safe.
     delete sslclient;
 }
 

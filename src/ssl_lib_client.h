@@ -33,6 +33,7 @@ typedef struct sslclient_context {
     mbedtls_pk_context client_key;
 
     unsigned long handshake_timeout;
+    bool context_allocated; // [FIX] Track allocation state to prevent re-allocation and fragmentation
 } sslclient_context;
 
 

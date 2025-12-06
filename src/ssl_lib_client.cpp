@@ -141,12 +141,27 @@ static int client_net_send( void *ctx, const unsigned char *buf, size_t len ) {
 void ssl_init(sslclient_context *ssl_client, Client *client)
 {
     log_v("Init SSL");
-    // reset embedded pointers to zero
+    
+    // [FIX] Persistent Memory Strategy
+    // If context is already allocated, just update the client pointer.
+    // Do NOT wipe the struct or we lose our pointers!
+    if (ssl_client->context_allocated) {
+        ssl_client->client = client;
+        return;
+    }
+
+    // Only Zero-out on FIRST initialization
     memset(ssl_client, 0, sizeof(sslclient_context));
     ssl_client->client = client;
+    
+    // Initialize mbedTLS structures ONCE
     mbedtls_ssl_init(&ssl_client->ssl_ctx);
     mbedtls_ssl_config_init(&ssl_client->ssl_conf);
     mbedtls_ctr_drbg_init(&ssl_client->drbg_ctx);
+    mbedtls_entropy_init(&ssl_client->entropy_ctx);
+    
+    // Mark as allocated so we never malloc/free again
+    ssl_client->context_allocated = true;
 }
 
 int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t port, int timeout, const char *rootCABuff, bool useRootCABundle, const char *cli_cert, const char *cli_key, const char *pskIdent, const char *psKey, bool insecure, const char **alpn_protos)
@@ -170,9 +185,9 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
         return -2;
     }
 
+    // [FIX] Only seed RNG (entropy already initialized in ssl_init for persistent context)
     log_v("Seeding the random number generator");
-    mbedtls_entropy_init(&ssl_client->entropy_ctx);
-
+    
     ret = mbedtls_ctr_drbg_seed(&ssl_client->drbg_ctx, mbedtls_entropy_func,
                                 &ssl_client->entropy_ctx, (const unsigned char *) pers, strlen(pers));
     if (ret < 0) {
@@ -358,32 +373,32 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
 
 void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, const char *cli_cert, const char *cli_key)
 {
-    log_v("Cleaning SSL connection.");
+    log_v("Cleaning SSL connection (Persistent Mode).");
 
-    ssl_client->client->stop();
+    if (ssl_client->client) {
+        ssl_client->client->stop();
+    }
 
-    // avoid memory leak if ssl connection attempt failed
+    // [FIX] DO NOT FREE MEMORY. JUST RESET SESSION.
+    // This prevents the Heap Fragmentation hole-punching effect.
+    
+    // Reset the SSL session state for the next connection
+    mbedtls_ssl_session_reset(&ssl_client->ssl_ctx);
+
+    // Clear certificates but keep the contexts initialized
     if (ssl_client->ssl_conf.ca_chain != NULL) {
         mbedtls_x509_crt_free(&ssl_client->ca_cert);
+        mbedtls_x509_crt_init(&ssl_client->ca_cert); // Re-init immediately
     }
     if (ssl_client->ssl_conf.key_cert != NULL) {
         mbedtls_x509_crt_free(&ssl_client->client_cert);
+        mbedtls_x509_crt_init(&ssl_client->client_cert); // Re-init immediately
         mbedtls_pk_free(&ssl_client->client_key);
+        mbedtls_pk_init(&ssl_client->client_key);       // Re-init immediately
     }
-    mbedtls_ssl_free(&ssl_client->ssl_ctx);
-    mbedtls_ssl_config_free(&ssl_client->ssl_conf);
-    mbedtls_ctr_drbg_free(&ssl_client->drbg_ctx);
-    mbedtls_entropy_free(&ssl_client->entropy_ctx);
 
-    // save only interesting fields
-    int handshake_timeout = ssl_client->handshake_timeout;
-    Client* pClient = ssl_client->client;
-
-    // reset embedded pointers to zero
-    memset(ssl_client, 0, sizeof(sslclient_context));
-    
-    ssl_client->handshake_timeout = handshake_timeout;
-    ssl_client->client = pClient;
+    // CRITICAL: Do NOT call mbedtls_ssl_free, config_free, drbg_free, or entropy_free.
+    // We keep the heavy allocations alive for the next round to prevent fragmentation.
 }
 
 
