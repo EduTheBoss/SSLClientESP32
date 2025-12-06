@@ -143,14 +143,14 @@ void ssl_init(sslclient_context *ssl_client, Client *client)
     log_v("Init SSL");
     
     // [FIX] Persistent Memory Strategy
-    // If context is already allocated, just update the client pointer.
-    // Do NOT wipe the struct or we lose our pointers!
-    if (ssl_client->context_allocated) {
+    // Check if already allocated (safe check: only trust flag if struct was properly zeroed)
+    // We check context_allocated AND ssl_ctx.private_p to ensure it's really initialized
+    if (ssl_client->context_allocated && ssl_client->ssl_ctx.private_p != NULL) {
         ssl_client->client = client;
         return;
     }
 
-    // Only Zero-out on FIRST initialization
+    // Zero-out for clean initialization (either first time or if flag was garbage)
     memset(ssl_client, 0, sizeof(sslclient_context));
     ssl_client->client = client;
     
