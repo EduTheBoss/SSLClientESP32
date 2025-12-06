@@ -384,23 +384,27 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
         ssl_client->client->stop();
     }
 
-    // [FIX] DO NOT FREE MEMORY. JUST RESET SESSION.
+    // [FIX] DO NOT FREE MEMORY. JUST RESET SESSION AND CERTIFICATES.
     // This prevents the Heap Fragmentation hole-punching effect.
     
+    // First, clear the certificate pointers from config to avoid dangling references
+    // (mbedtls_ssl_conf_ca_chain and mbedtls_ssl_conf_own_cert set these)
+    ssl_client->ssl_conf.ca_chain = NULL;
+    ssl_client->ssl_conf.key_cert = NULL;
+    
+    // Now free and re-init the certificate structures themselves
+    mbedtls_x509_crt_free(&ssl_client->ca_cert);
+    mbedtls_x509_crt_init(&ssl_client->ca_cert);
+    
+    mbedtls_x509_crt_free(&ssl_client->client_cert);
+    mbedtls_x509_crt_init(&ssl_client->client_cert);
+    
+    mbedtls_pk_free(&ssl_client->client_key);
+    mbedtls_pk_init(&ssl_client->client_key);
+    
     // Reset the SSL session state for the next connection
+    // This clears session-specific data but keeps the SSL context allocated
     mbedtls_ssl_session_reset(&ssl_client->ssl_ctx);
-
-    // Clear certificates but keep the contexts initialized
-    if (ssl_client->ssl_conf.ca_chain != NULL) {
-        mbedtls_x509_crt_free(&ssl_client->ca_cert);
-        mbedtls_x509_crt_init(&ssl_client->ca_cert); // Re-init immediately
-    }
-    if (ssl_client->ssl_conf.key_cert != NULL) {
-        mbedtls_x509_crt_free(&ssl_client->client_cert);
-        mbedtls_x509_crt_init(&ssl_client->client_cert); // Re-init immediately
-        mbedtls_pk_free(&ssl_client->client_key);
-        mbedtls_pk_init(&ssl_client->client_key);       // Re-init immediately
-    }
 
     // CRITICAL: Do NOT call mbedtls_ssl_free, config_free, drbg_free, or entropy_free.
     // We keep the heavy allocations alive for the next round to prevent fragmentation.
