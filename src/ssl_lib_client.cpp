@@ -185,13 +185,23 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
         return -2;
     }
 
-    // [FIX] Only seed RNG (entropy already initialized in ssl_init for persistent context)
+    // [FIX] Only seed RNG on first connection, reseed on subsequent connections
     log_v("Seeding the random number generator");
     
-    ret = mbedtls_ctr_drbg_seed(&ssl_client->drbg_ctx, mbedtls_entropy_func,
-                                &ssl_client->entropy_ctx, (const unsigned char *) pers, strlen(pers));
-    if (ret < 0) {
-        return handle_error(ret);
+    if (!ssl_client->drbg_seeded) {
+        // First time: seed the DRBG
+        ret = mbedtls_ctr_drbg_seed(&ssl_client->drbg_ctx, mbedtls_entropy_func,
+                                    &ssl_client->entropy_ctx, (const unsigned char *) pers, strlen(pers));
+        if (ret < 0) {
+            return handle_error(ret);
+        }
+        ssl_client->drbg_seeded = true;
+    } else {
+        // Subsequent connections: reseed instead of seed
+        ret = mbedtls_ctr_drbg_reseed(&ssl_client->drbg_ctx, (const unsigned char *) pers, strlen(pers));
+        if (ret < 0) {
+            return handle_error(ret);
+        }
     }
 
     log_v("Setting up the SSL/TLS structure...");

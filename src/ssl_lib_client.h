@@ -34,6 +34,7 @@ typedef struct sslclient_context {
 
     unsigned long handshake_timeout;
     bool context_allocated; // [FIX] Track allocation state to prevent re-allocation and fragmentation
+    bool drbg_seeded;       // [FIX] Track if RNG has been seeded (can only seed once)
 } sslclient_context;
 
 
