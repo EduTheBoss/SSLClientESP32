@@ -160,6 +160,11 @@ void ssl_init(sslclient_context *ssl_client, Client *client)
     mbedtls_ctr_drbg_init(&ssl_client->drbg_ctx);
     mbedtls_entropy_init(&ssl_client->entropy_ctx);
     
+    // Initialize certificate structures
+    mbedtls_x509_crt_init(&ssl_client->ca_cert);
+    mbedtls_x509_crt_init(&ssl_client->client_cert);
+    mbedtls_pk_init(&ssl_client->client_key);
+    
     // Mark as allocated so we never malloc/free again
     ssl_client->context_allocated = true;
 }
