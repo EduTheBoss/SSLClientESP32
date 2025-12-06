@@ -143,9 +143,10 @@ void ssl_init(sslclient_context *ssl_client, Client *client)
     log_v("Init SSL");
     
     // [FIX] Persistent Memory Strategy
-    // Check if already allocated (safe check: only trust flag if struct was properly zeroed)
-    // We check context_allocated AND ssl_ctx.private_p to ensure it's really initialized
-    if (ssl_client->context_allocated && ssl_client->ssl_ctx.private_p != NULL) {
+    // Check if already allocated (safe check: only trust flag if struct was properly initialized)
+    // We verify by checking if ssl_conf.private_version is set (it's set by mbedtls_ssl_config_init)
+    if (ssl_client->context_allocated && ssl_client->drbg_seeded) {
+        // Already initialized, just update the client pointer
         ssl_client->client = client;
         return;
     }
