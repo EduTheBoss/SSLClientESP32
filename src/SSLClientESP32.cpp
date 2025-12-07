@@ -186,7 +186,12 @@ size_t SSLClientESP32::write(const uint8_t *buf, size_t size)
     }
     int res = SSLClientLib::send_ssl_data(sslclient, buf, size);
     if (res < 0) {
-        stop();
+        // [CRITICAL FIX] Don't call stop() on dead connection - it blocks for 90s!
+        // Just mark as disconnected and let connection be rebuilt naturally.
+        log_e("Write failed (connection dead) - marking disconnected without blocking cleanup");
+        _connected = false;
+        _peek = -1;
+        // Don't call stop() here - it will block trying to close dead socket
         res = 0;
     }
     return res;
@@ -216,7 +221,10 @@ int SSLClientESP32::read(uint8_t *buf, size_t size)
     
     int res = SSLClientLib::get_ssl_receive(sslclient, buf, size);
     if (res < 0) {
-        stop();
+        // [CRITICAL FIX] Don't call blocking stop() on read errors
+        log_e(\"read() failed - marking disconnected\");
+        _connected = false;
+        _peek = -1;
         return peeked?peeked:res;
     }
     return res + peeked;
@@ -230,7 +238,10 @@ int SSLClientESP32::available()
     }
     int res = SSLClientLib::data_to_read(sslclient);
     if (res < 0) {
-        stop();
+        // [CRITICAL FIX] Don't call blocking stop() here either
+        log_e(\"available() failed - marking disconnected\");
+        _connected = false;
+        _peek = -1;
         return peeked?peeked:res;
     }
     return res+peeked;

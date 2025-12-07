@@ -389,7 +389,15 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
     log_v("Cleaning SSL connection (Persistent Mode).");
 
     if (ssl_client->client) {
-        ssl_client->client->stop();
+        // [CRITICAL FIX] Check if underlying connection is actually alive before calling stop()
+        // If connection is dead, calling stop() blocks for 15-90+ seconds waiting for modem response
+        if (ssl_client->client->connected()) {
+            log_v("Gracefully closing active connection");
+            ssl_client->client->stop();
+        } else {
+            log_w("Skipping stop() on dead connection (fast-fail)");
+            // Connection already dead - no need to wait for modem timeout
+        }
     }
 
     // [FIX] DO NOT FREE MEMORY. JUST RESET SESSION AND CERTIFICATES.
