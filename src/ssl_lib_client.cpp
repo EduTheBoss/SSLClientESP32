@@ -134,6 +134,12 @@ static int client_net_send( void *ctx, const unsigned char *buf, size_t len ) {
     
     int result = client->write(buf, len);
     
+    // [CRITICAL FIX] If write returns 0, connection is dead - return error
+    if (result == 0) {
+        log_e("Write returned 0 - connection dead");
+        return MBEDTLS_ERR_NET_SEND_FAILED;
+    }
+    
     // log_d("SSL client TX res=%d len=%d", result, len);
     return result;
 }
@@ -447,7 +453,9 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     int ret = -1;
 
     unsigned long start = millis();
-    unsigned long sendTimeout = 10000; 
+    // [CRITICAL FIX] Reduce timeout from 10s to 5s to prevent excessive blocking
+    // With 3s modem timeouts, 5s is enough for 1 attempt + small buffer
+    unsigned long sendTimeout = 5000; 
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
         
@@ -463,7 +471,7 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
         }
 
         if (millis() - start > sendTimeout) {
-            log_e("SSL Write Timed Out (>10s) - Force Close");
+            log_e("SSL Write Timed Out (>5s) - Force Close");
             return -1;
         }
 
