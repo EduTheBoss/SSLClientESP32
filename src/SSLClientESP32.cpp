@@ -186,13 +186,12 @@ size_t SSLClientESP32::write(const uint8_t *buf, size_t size)
     }
     int res = SSLClientLib::send_ssl_data(sslclient, buf, size);
     if (res < 0) {
-        // [CRITICAL FIX] Don't call stop() on dead connection - it blocks for 90s!
-        // Just mark as disconnected and let connection be rebuilt naturally.
-        log_e("Write failed (connection dead) - marking disconnected without blocking cleanup");
+        // [CRITICAL FIX] Connection is dead - mark disconnected immediately
+        log_e("Write failed (connection dead) - forcing disconnect");
         _connected = false;
         _peek = -1;
-        // Don't call stop() here - it will block trying to close dead socket
-        res = 0;
+        // Return 0 to indicate write failure to PubSubClient
+        return 0;
     }
     return res;
 }
@@ -249,9 +248,10 @@ int SSLClientESP32::available()
 
 uint8_t SSLClientESP32::connected()
 {
-    uint8_t dummy = 0;
-    read(&dummy, 0);
-
+    // [CRITICAL FIX] Don't call read() here - it can block on dead connections
+    // Just return the connection state flag
+    // The original code called read(&dummy, 0) to check connection health,
+    // but this can trigger blocking modem operations when connection is dying
     return _connected;
 }
 
