@@ -222,7 +222,7 @@ int SSLClientESP32::read(uint8_t *buf, size_t size)
     int res = SSLClientLib::get_ssl_receive(sslclient, buf, size);
     if (res < 0) {
         // [CRITICAL FIX] Don't call blocking stop() on read errors
-        log_e(\"read() failed - marking disconnected\");
+        log_e("read() failed - marking disconnected");
         _connected = false;
         _peek = -1;
         return peeked?peeked:res;
@@ -239,7 +239,7 @@ int SSLClientESP32::available()
     int res = SSLClientLib::data_to_read(sslclient);
     if (res < 0) {
         // [CRITICAL FIX] Don't call blocking stop() here either
-        log_e(\"available() failed - marking disconnected\");
+        log_e("available() failed - marking disconnected");
         _connected = false;
         _peek = -1;
         return peeked?peeked:res;
