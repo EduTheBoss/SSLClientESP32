@@ -132,38 +132,8 @@ static int client_net_send( void *ctx, const unsigned char *buf, size_t len ) {
     
     //esp_log_buffer_hexdump_internal("SSL.WR", buf, (uint16_t)len, ESP_LOG_VERBOSE);
     
-    // [CRITICAL FIX] Cumulative timeout protection
-    // mbedtls can call us 100+ times for a single SSL_write operation
-    // If each call blocks for 500ms, that's 50+ seconds total
-    // We need to abort if we're spending too long in failed writes
-    static unsigned long lastSuccessTime = 0;
-    static unsigned long lastFailTime = 0;
-    static int failedCallsSinceSuccess = 0;
-    static int totalCallsSinceFail = 0;
-    
-    // If we had a failure, block ALL subsequent calls for 1 second
-    // This prevents PubSubClient from hammering us with retries
-    if (lastFailTime > 0 && (millis() - lastFailTime < 1000)) {
-        totalCallsSinceFail++;
-        log_e("CRITICAL: Blocking retry #%d (connection marked dead %lu ms ago)", 
-              totalCallsSinceFail, millis() - lastFailTime);
-        // Feed watchdog even while blocking retries
-        esp_task_wdt_reset();
-        return MBEDTLS_ERR_NET_CONN_RESET;
-    }
-    
-    // If it's been >5s since our last successful write, abort
-    // This catches the case where mbedtls keeps retrying with a dead connection
-    if (lastSuccessTime > 0 && (millis() - lastSuccessTime > 5000)) {
-        log_e("CRITICAL: No successful write in 5s (%d failed calls) - connection dead", 
-              failedCallsSinceSuccess);
-        lastSuccessTime = 0; // Reset
-        failedCallsSinceSuccess = 0;
-        lastFailTime = millis();
-        return MBEDTLS_ERR_NET_CONN_RESET;
-    }
-    
-    // [CRITICAL FIX] Track failed write attempts to detect dead connection
+    // [CRITICAL FIX] Track consecutive zero writes to detect dead connection
+    // We DON'T use time-based tracking because it causes false positives
     static int consecutiveZeroWrites = 0;
     
     int result = client->write(buf, len);
@@ -171,24 +141,16 @@ static int client_net_send( void *ctx, const unsigned char *buf, size_t len ) {
     // [CRITICAL FIX] If write returns 0, connection is dead
     if (result == 0) {
         consecutiveZeroWrites++;
-        failedCallsSinceSuccess++;
-        lastFailTime = millis(); // Mark when we failed
-        totalCallsSinceFail = 0; // Reset retry counter
-        log_e("Write returned 0 (attempt %d, %d since success) - connection dead", 
-              consecutiveZeroWrites, failedCallsSinceSuccess);
+        log_e("Write returned 0 (attempt %d) - connection dead", consecutiveZeroWrites);
         
         // After first zero write, connection is clearly dead - fail immediately
         // Return FATAL error to prevent mbedtls from retrying
         return MBEDTLS_ERR_NET_CONN_RESET; // Fatal: connection reset by peer
     }
     
-    // Reset counters on successful write
+    // Reset counter on successful write
     if (result > 0) {
         consecutiveZeroWrites = 0;
-        failedCallsSinceSuccess = 0;
-        lastSuccessTime = millis();
-        lastFailTime = 0; // Clear fail marker
-        totalCallsSinceFail = 0;
     }
     
     // log_d("SSL client TX res=%d len=%d", result, len);
