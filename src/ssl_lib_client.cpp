@@ -455,7 +455,11 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     unsigned long start = millis();
     // [CRITICAL FIX] Reduce timeout from 10s to 5s to prevent excessive blocking
     // With 3s modem timeouts, 5s is enough for 1 attempt + small buffer
-    unsigned long sendTimeout = 5000; 
+    unsigned long sendTimeout = 5000;
+    
+    // [CRITICAL FIX] Track consecutive failures to detect dead connection fast
+    int consecutiveErrors = 0;
+    int maxConsecutiveErrors = 2; // Fail after 2 rapid errors
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
         
@@ -468,6 +472,18 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret < 0) {
             log_v("Handling error %d", ret);
             return handle_error(ret);
+        }
+        
+        // [CRITICAL FIX] Count consecutive WANT_WRITE/WANT_READ errors
+        // If we get multiple in quick succession, connection is dead
+        if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ) {
+            consecutiveErrors++;
+            if (consecutiveErrors >= maxConsecutiveErrors) {
+                log_e("Too many consecutive SSL retry requests (%d) - connection dead", consecutiveErrors);
+                return -1;
+            }
+        } else {
+            consecutiveErrors = 0; // Reset on successful progress
         }
 
         if (millis() - start > sendTimeout) {
