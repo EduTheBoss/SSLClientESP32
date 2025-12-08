@@ -75,6 +75,14 @@ SSLClientESP32::~SSLClientESP32()
 
 void SSLClientESP32::stop()
 {
+    // [CRITICAL FIX] If connection is already marked dead, skip ALL cleanup
+    // Calling stop() on dead connection triggers cascading timeouts that can exceed watchdog
+    if (!_connected) {
+        log_d("stop() called on already-disconnected socket - skipping cleanup");
+        _peek = -1;
+        return;
+    }
+    
     if (sslclient->client >= 0) {
         //sslclient->client->stop();
         _connected = false;
