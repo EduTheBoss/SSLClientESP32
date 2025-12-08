@@ -132,12 +132,24 @@ static int client_net_send( void *ctx, const unsigned char *buf, size_t len ) {
     
     //esp_log_buffer_hexdump_internal("SSL.WR", buf, (uint16_t)len, ESP_LOG_VERBOSE);
     
+    // [CRITICAL FIX] Track failed write attempts to detect dead connection
+    static int consecutiveZeroWrites = 0;
+    
     int result = client->write(buf, len);
     
-    // [CRITICAL FIX] If write returns 0, connection is dead - return error
+    // [CRITICAL FIX] If write returns 0, connection is dead
     if (result == 0) {
-        log_e("Write returned 0 - connection dead");
-        return MBEDTLS_ERR_NET_SEND_FAILED;
+        consecutiveZeroWrites++;
+        log_e("Write returned 0 (attempt %d) - connection dead", consecutiveZeroWrites);
+        
+        // After first zero write, connection is clearly dead - fail immediately
+        // Return FATAL error to prevent mbedtls from retrying
+        return MBEDTLS_ERR_NET_CONN_RESET; // Fatal: connection reset by peer
+    }
+    
+    // Reset counter on successful write
+    if (result > 0) {
+        consecutiveZeroWrites = 0;
     }
     
     // log_d("SSL client TX res=%d len=%d", result, len);
@@ -453,13 +465,11 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     int ret = -1;
 
     unsigned long start = millis();
-    // [CRITICAL FIX] Reduce timeout from 10s to 5s to prevent excessive blocking
-    // With 3s modem timeouts, 5s is enough for 1 attempt + small buffer
-    unsigned long sendTimeout = 5000;
+    // [CRITICAL FIX] Very short timeout - fail fast on dead connections
+    unsigned long sendTimeout = 3000; // 3 seconds max total
     
-    // [CRITICAL FIX] Track consecutive failures to detect dead connection fast
-    int consecutiveErrors = 0;
-    int maxConsecutiveErrors = 2; // Fail after 2 rapid errors
+    // [CRITICAL FIX] Fail on FIRST transport error - no retries on dead connection
+    bool hadTransportError = false;
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
         
@@ -468,26 +478,32 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
             log_e("SSL Write returned 0 (Connection Closed/Stalled)");
             return -1; 
         }
+        
+        // [CRITICAL FIX] Check for FATAL transport errors that indicate dead connection
+        // These should cause immediate abort, not retry
+        if (ret == MBEDTLS_ERR_NET_CONN_RESET || 
+            ret == MBEDTLS_ERR_NET_SEND_FAILED) {
+            log_e("FATAL transport error %d - connection dead, aborting immediately", ret);
+            return -1;
+        }
 
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret < 0) {
             log_v("Handling error %d", ret);
             return handle_error(ret);
         }
         
-        // [CRITICAL FIX] Count consecutive WANT_WRITE/WANT_READ errors
-        // If we get multiple in quick succession, connection is dead
+        // [CRITICAL FIX] On ANY want_write/want_read after we already had one,
+        // assume connection is dead. Healthy connections don't repeatedly ask to retry.
         if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ) {
-            consecutiveErrors++;
-            if (consecutiveErrors >= maxConsecutiveErrors) {
-                log_e("Too many consecutive SSL retry requests (%d) - connection dead", consecutiveErrors);
+            if (hadTransportError) {
+                log_e("Second transport retry request - connection dead");
                 return -1;
             }
-        } else {
-            consecutiveErrors = 0; // Reset on successful progress
+            hadTransportError = true;
         }
 
         if (millis() - start > sendTimeout) {
-            log_e("SSL Write Timed Out (>5s) - Force Close");
+            log_e("SSL Write Timed Out (>3s) - Force Close");
             return -1;
         }
 
