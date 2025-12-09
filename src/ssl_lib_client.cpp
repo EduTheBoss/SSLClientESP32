@@ -132,26 +132,7 @@ static int client_net_send( void *ctx, const unsigned char *buf, size_t len ) {
     
     //esp_log_buffer_hexdump_internal("SSL.WR", buf, (uint16_t)len, ESP_LOG_VERBOSE);
     
-    // [CRITICAL FIX] Track consecutive zero writes to detect dead connection
-    // We DON'T use time-based tracking because it causes false positives
-    static int consecutiveZeroWrites = 0;
-    
     int result = client->write(buf, len);
-    
-    // [CRITICAL FIX] If write returns 0, connection is dead
-    if (result == 0) {
-        consecutiveZeroWrites++;
-        log_e("Write returned 0 (attempt %d) - connection dead", consecutiveZeroWrites);
-        
-        // After first zero write, connection is clearly dead - fail immediately
-        // Return FATAL error to prevent mbedtls from retrying
-        return MBEDTLS_ERR_NET_CONN_RESET; // Fatal: connection reset by peer
-    }
-    
-    // Reset counter on successful write
-    if (result > 0) {
-        consecutiveZeroWrites = 0;
-    }
     
     // log_d("SSL client TX res=%d len=%d", result, len);
     return result;
@@ -407,17 +388,12 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
 {
     log_v("Cleaning SSL connection (Persistent Mode).");
 
-    if (ssl_client->client) {
-        // [CRITICAL FIX] Check if underlying connection is actually alive before calling stop()
-        // If connection is dead, calling stop() blocks for 15-90+ seconds waiting for modem response
-        if (ssl_client->client->connected()) {
-            log_v("Gracefully closing active connection");
-            ssl_client->client->stop();
-        } else {
-            log_w("Skipping stop() on dead connection (fast-fail)");
-            // Connection already dead - no need to wait for modem timeout
-        }
-    }
+    // [CRITICAL FIX] DO NOT call client->stop() here!
+    // The caller (SSLClientESP32::stop) should decide whether to stop the underlying client.
+    // When SSL detects a dead connection (write returns 0), the client is already dead.
+    // Calling stop() on TinyGSM sends AT+CIPCLOSE which blocks 15s on dead connections.
+    // This causes the watchdog timeout at 10000s uptime.
+    // The client will be cleaned up on next reconnection attempt.
 
     // [FIX] DO NOT FREE MEMORY. JUST RESET SESSION AND CERTIFICATES.
     // This prevents the Heap Fragmentation hole-punching effect.
@@ -466,11 +442,7 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     int ret = -1;
 
     unsigned long start = millis();
-    // [CRITICAL FIX] Very short timeout - fail fast on dead connections
-    unsigned long sendTimeout = 3000; // 3 seconds max total
-    
-    // [CRITICAL FIX] Fail on FIRST transport error - no retries on dead connection
-    bool hadTransportError = false;
+    unsigned long sendTimeout = 10000; 
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
         
@@ -479,32 +451,14 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
             log_e("SSL Write returned 0 (Connection Closed/Stalled)");
             return -1; 
         }
-        
-        // [CRITICAL FIX] Check for FATAL transport errors that indicate dead connection
-        // These should cause immediate abort, not retry
-        if (ret == MBEDTLS_ERR_NET_CONN_RESET || 
-            ret == MBEDTLS_ERR_NET_SEND_FAILED) {
-            log_e("FATAL transport error %d - connection dead, aborting immediately", ret);
-            return -1;
-        }
 
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret < 0) {
             log_v("Handling error %d", ret);
             return handle_error(ret);
         }
-        
-        // [CRITICAL FIX] On ANY want_write/want_read after we already had one,
-        // assume connection is dead. Healthy connections don't repeatedly ask to retry.
-        if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ) {
-            if (hadTransportError) {
-                log_e("Second transport retry request - connection dead");
-                return -1;
-            }
-            hadTransportError = true;
-        }
 
         if (millis() - start > sendTimeout) {
-            log_e("SSL Write Timed Out (>3s) - Force Close");
+            log_e("SSL Write Timed Out (>10s) - Force Close");
             return -1;
         }
 

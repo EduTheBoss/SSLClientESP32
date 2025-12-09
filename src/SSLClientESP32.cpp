@@ -75,19 +75,16 @@ SSLClientESP32::~SSLClientESP32()
 
 void SSLClientESP32::stop()
 {
-    // [CRITICAL FIX] If connection is already marked dead, skip ALL cleanup
-    // Calling stop() on dead connection triggers cascading timeouts that can exceed watchdog
-    if (!_connected) {
-        log_d("stop() called on already-disconnected socket - skipping cleanup");
-        _peek = -1;
-        return;
-    }
+    // [FIX] CRITICAL: Never call client->stop() on dead connections
+    // When the SSL write fails (returns 0), the underlying TinyGSM connection
+    // is already dead. Calling client->stop() sends AT+CIPCLOSE which can block
+    // for 15 seconds waiting for a response from the unresponsive modem.
+    // This causes a watchdog timeout when multiple retries occur.
+    // Solution: Just clean up SSL state and mark connection as dead.
+    _connected = false;
+    _peek = -1;
     
-    if (sslclient->client >= 0) {
-        //sslclient->client->stop();
-        _connected = false;
-        _peek = -1;
-    }
+    // Only call stop_ssl_socket to clean SSL state, NOT the underlying client
     SSLClientLib::stop_ssl_socket(sslclient, _CA_cert, _cert, _private_key);
 }
 
@@ -194,12 +191,8 @@ size_t SSLClientESP32::write(const uint8_t *buf, size_t size)
     }
     int res = SSLClientLib::send_ssl_data(sslclient, buf, size);
     if (res < 0) {
-        // [CRITICAL FIX] Connection is dead - mark disconnected immediately
-        log_e("Write failed (connection dead) - forcing disconnect");
-        _connected = false;
-        _peek = -1;
-        // Return 0 to indicate write failure to PubSubClient
-        return 0;
+        stop();
+        res = 0;
     }
     return res;
 }
@@ -228,10 +221,7 @@ int SSLClientESP32::read(uint8_t *buf, size_t size)
     
     int res = SSLClientLib::get_ssl_receive(sslclient, buf, size);
     if (res < 0) {
-        // [CRITICAL FIX] Don't call blocking stop() on read errors
-        log_e("read() failed - marking disconnected");
-        _connected = false;
-        _peek = -1;
+        stop();
         return peeked?peeked:res;
     }
     return res + peeked;
@@ -245,10 +235,7 @@ int SSLClientESP32::available()
     }
     int res = SSLClientLib::data_to_read(sslclient);
     if (res < 0) {
-        // [CRITICAL FIX] Don't call blocking stop() here either
-        log_e("available() failed - marking disconnected");
-        _connected = false;
-        _peek = -1;
+        stop();
         return peeked?peeked:res;
     }
     return res+peeked;
@@ -256,10 +243,9 @@ int SSLClientESP32::available()
 
 uint8_t SSLClientESP32::connected()
 {
-    // [CRITICAL FIX] Don't call read() here - it can block on dead connections
-    // Just return the connection state flag
-    // The original code called read(&dummy, 0) to check connection health,
-    // but this can trigger blocking modem operations when connection is dying
+    uint8_t dummy = 0;
+    read(&dummy, 0);
+
     return _connected;
 }
 
