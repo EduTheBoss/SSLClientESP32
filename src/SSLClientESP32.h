@@ -42,6 +42,10 @@ protected:
     bool _use_ca_bundle = false;
 
     bool _connected = false;
+    // When a fatal SSL I/O error happens, doing a full mbedTLS reset inside write()/read()
+    // can stall the caller (e.g., PubSubClient::publish) and trigger the task WDT.
+    // Instead, mark cleanup as pending and perform it on the next connect().
+    bool _cleanup_pending = false;
 
 public:
     SSLClientESP32();

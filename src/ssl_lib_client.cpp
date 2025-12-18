@@ -388,6 +388,11 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
 {
     log_v("Cleaning SSL connection (Persistent Mode).");
 
+    // Keep the task watchdog fed during cleanup.
+    // In rare corrupted TLS states, mbedTLS frees/resets can take long enough
+    // to trip the WDT if we don't yield.
+    esp_task_wdt_reset();
+
     // [CRITICAL FIX] DO NOT call client->stop() here!
     // The caller (SSLClientESP32::stop) should decide whether to stop the underlying client.
     // When SSL detects a dead connection (write returns 0), the client is already dead.
@@ -402,20 +407,30 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
     // (mbedtls_ssl_conf_ca_chain and mbedtls_ssl_conf_own_cert set these)
     ssl_client->ssl_conf.ca_chain = NULL;
     ssl_client->ssl_conf.key_cert = NULL;
+
+    esp_task_wdt_reset();
     
     // Now free and re-init the certificate structures themselves
     mbedtls_x509_crt_free(&ssl_client->ca_cert);
     mbedtls_x509_crt_init(&ssl_client->ca_cert);
+
+    esp_task_wdt_reset();
     
     mbedtls_x509_crt_free(&ssl_client->client_cert);
     mbedtls_x509_crt_init(&ssl_client->client_cert);
+
+    esp_task_wdt_reset();
     
     mbedtls_pk_free(&ssl_client->client_key);
     mbedtls_pk_init(&ssl_client->client_key);
+
+    esp_task_wdt_reset();
     
     // Reset the SSL session state for the next connection
     // This clears session-specific data but keeps the SSL context allocated
     mbedtls_ssl_session_reset(&ssl_client->ssl_ctx);
+
+    esp_task_wdt_reset();
 
     // CRITICAL: Do NOT call mbedtls_ssl_free, config_free, drbg_free, or entropy_free.
     // We keep the heavy allocations alive for the next round to prevent fragmentation.

@@ -83,6 +83,7 @@ void SSLClientESP32::stop()
     // Solution: Just clean up SSL state and mark connection as dead.
     _connected = false;
     _peek = -1;
+    _cleanup_pending = false;
     
     // Only call stop_ssl_socket to clean SSL state, NOT the underlying client
     SSLClientLib::stop_ssl_socket(sslclient, _CA_cert, _cert, _private_key);
@@ -124,6 +125,15 @@ int SSLClientESP32::connect(IPAddress ip, uint16_t port, const char *CA_cert, co
 int SSLClientESP32::connect(const char *host, uint16_t port, const char *CA_cert, const char *cert, const char *private_key)
 {
     log_d("Connecting to %s:%d", host, port);
+
+    // If a previous SSL I/O failed, defer the heavy cleanup until here.
+    // Doing it inside write()/read() can stall PubSubClient and trigger WDT.
+    if (_cleanup_pending) {
+        log_w("Pending TLS cleanup from prior failure - resetting session before connect");
+        SSLClientLib::stop_ssl_socket(sslclient, _CA_cert, _cert, _private_key);
+        _cleanup_pending = false;
+    }
+
     if(_timeout > 0){
         sslclient->handshake_timeout = _timeout;
     }
@@ -146,6 +156,13 @@ int SSLClientESP32::connect(IPAddress ip, uint16_t port, const char *pskIdent, c
 
 int SSLClientESP32::connect(const char *host, uint16_t port, const char *pskIdent, const char *psKey) {
     log_v("start_ssl_client with PSK");
+
+    if (_cleanup_pending) {
+        log_w("Pending TLS cleanup from prior failure - resetting session before connect");
+        SSLClientLib::stop_ssl_socket(sslclient, _CA_cert, _cert, _private_key);
+        _cleanup_pending = false;
+    }
+
     if(_timeout > 0){
         sslclient->handshake_timeout = _timeout;
     }
@@ -191,7 +208,12 @@ size_t SSLClientESP32::write(const uint8_t *buf, size_t size)
     }
     int res = SSLClientLib::send_ssl_data(sslclient, buf, size);
     if (res < 0) {
-        stop();
+        // Fail fast: mark dead and let the caller unwind.
+        // Cleanup will run on next connect().
+        _lastError = res;
+        _connected = false;
+        _peek = -1;
+        _cleanup_pending = true;
         res = 0;
     }
     return res;
@@ -221,7 +243,10 @@ int SSLClientESP32::read(uint8_t *buf, size_t size)
     
     int res = SSLClientLib::get_ssl_receive(sslclient, buf, size);
     if (res < 0) {
-        stop();
+        _lastError = res;
+        _connected = false;
+        _peek = -1;
+        _cleanup_pending = true;
         return peeked?peeked:res;
     }
     return res + peeked;
@@ -235,7 +260,10 @@ int SSLClientESP32::available()
     }
     int res = SSLClientLib::data_to_read(sslclient);
     if (res < 0) {
-        stop();
+        _lastError = res;
+        _connected = false;
+        _peek = -1;
+        _cleanup_pending = true;
         return peeked?peeked:res;
     }
     return res+peeked;
