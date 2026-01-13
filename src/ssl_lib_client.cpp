@@ -457,13 +457,23 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     int ret = -1;
 
     unsigned long start = millis();
-    unsigned long sendTimeout = 10000; 
+    // [FIX] Reduced timeout from 10s to 5s for faster failure detection
+    // Combined with improved reconnection logic, this prevents long stalls
+    unsigned long sendTimeout = 5000; 
+    
+    // [FIX] Track iteration count to detect spinning without progress
+    int iterations = 0;
+    const int maxIterations = 500; // 500 * 10ms = 5s maximum spin time
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
+        iterations++;
         
-        // The check that catches the 2.7h bug
+        // The check that catches the modem state accumulation bug
+        // When modem internal TCP state is corrupted, write returns 0 immediately
         if (ret == 0) {
             log_e("SSL Write returned 0 (Connection Closed/Stalled)");
+            // [FIX] Signal that modem state may be corrupted
+            // Caller should consider triggering modem hard reset
             return -1; 
         }
 
@@ -472,8 +482,10 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
             return handle_error(ret);
         }
 
-        if (millis() - start > sendTimeout) {
-            log_e("SSL Write Timed Out (>10s) - Force Close");
+        // [FIX] Dual timeout protection: wall-clock time AND iteration count
+        // Prevents both slow stalls and fast-spinning busy loops
+        if (millis() - start > sendTimeout || iterations > maxIterations) {
+            log_e("SSL Write Timed Out (>5s or >%d iterations) - Force Close", maxIterations);
             return -1;
         }
 
