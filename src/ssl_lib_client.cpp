@@ -436,46 +436,6 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
     // We keep the heavy allocations alive for the next round to prevent fragmentation.
 }
 
-// [FIX] Full SSL context reset - use periodically (every ~30-60 min) to prevent
-// session ticket accumulation and TLS state corruption over long uptimes
-void full_ssl_context_reset(sslclient_context *ssl_client)
-{
-    log_i("Performing full SSL context reset for long-term stability");
-    
-    esp_task_wdt_reset();
-    
-    // 1. Clear certificate config pointers first
-    ssl_client->ssl_conf.ca_chain = NULL;
-    ssl_client->ssl_conf.key_cert = NULL;
-    
-    // 2. Free and reinit certificates
-    mbedtls_x509_crt_free(&ssl_client->ca_cert);
-    mbedtls_x509_crt_init(&ssl_client->ca_cert);
-    
-    esp_task_wdt_reset();
-    
-    mbedtls_x509_crt_free(&ssl_client->client_cert);
-    mbedtls_x509_crt_init(&ssl_client->client_cert);
-    
-    esp_task_wdt_reset();
-    
-    mbedtls_pk_free(&ssl_client->client_key);
-    mbedtls_pk_init(&ssl_client->client_key);
-    
-    esp_task_wdt_reset();
-    
-    // 3. Full SSL context reset (clears session tickets, cached data, etc.)
-    mbedtls_ssl_session_reset(&ssl_client->ssl_ctx);
-    
-    // 4. Reset the SSL config defaults flag to force reconfiguration
-    // This ensures fresh TLS parameters on next connect
-    ssl_client->config_setup = false;
-    
-    esp_task_wdt_reset();
-    
-    log_i("Full SSL context reset complete");
-}
-
 
 int data_to_read(sslclient_context *ssl_client)
 {
