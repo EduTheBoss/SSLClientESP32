@@ -42,6 +42,7 @@ typedef struct sslclient_context {
 void ssl_init(sslclient_context *ssl_client, Client *client);
 int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t port, int timeout, const char *rootCABuff, bool useRootCABundle, const char *cli_cert, const char *cli_key, const char *pskIdent, const char *psKey, bool insecure, const char **alpn_protos);
 void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, const char *cli_cert, const char *cli_key);
+void full_ssl_context_reset(sslclient_context *ssl_client);  // [FIX] Periodic full reset for long-term stability
 int data_to_read(sslclient_context *ssl_client);
 int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len);
 int get_ssl_receive(sslclient_context *ssl_client, uint8_t *data, int length);

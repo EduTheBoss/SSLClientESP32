@@ -436,6 +436,46 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
     // We keep the heavy allocations alive for the next round to prevent fragmentation.
 }
 
+// [FIX] Full SSL context reset - use periodically (every ~30-60 min) to prevent
+// session ticket accumulation and TLS state corruption over long uptimes
+void full_ssl_context_reset(sslclient_context *ssl_client)
+{
+    log_i("Performing full SSL context reset for long-term stability");
+    
+    esp_task_wdt_reset();
+    
+    // 1. Clear certificate config pointers first
+    ssl_client->ssl_conf.ca_chain = NULL;
+    ssl_client->ssl_conf.key_cert = NULL;
+    
+    // 2. Free and reinit certificates
+    mbedtls_x509_crt_free(&ssl_client->ca_cert);
+    mbedtls_x509_crt_init(&ssl_client->ca_cert);
+    
+    esp_task_wdt_reset();
+    
+    mbedtls_x509_crt_free(&ssl_client->client_cert);
+    mbedtls_x509_crt_init(&ssl_client->client_cert);
+    
+    esp_task_wdt_reset();
+    
+    mbedtls_pk_free(&ssl_client->client_key);
+    mbedtls_pk_init(&ssl_client->client_key);
+    
+    esp_task_wdt_reset();
+    
+    // 3. Full SSL context reset (clears session tickets, cached data, etc.)
+    mbedtls_ssl_session_reset(&ssl_client->ssl_ctx);
+    
+    // 4. Reset the SSL config defaults flag to force reconfiguration
+    // This ensures fresh TLS parameters on next connect
+    ssl_client->config_setup = false;
+    
+    esp_task_wdt_reset();
+    
+    log_i("Full SSL context reset complete");
+}
+
 
 int data_to_read(sslclient_context *ssl_client)
 {
@@ -457,23 +497,13 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     int ret = -1;
 
     unsigned long start = millis();
-    // [FIX] Reduced timeout from 10s to 5s for faster failure detection
-    // Combined with improved reconnection logic, this prevents long stalls
-    unsigned long sendTimeout = 5000; 
-    
-    // [FIX] Track iteration count to detect spinning without progress
-    int iterations = 0;
-    const int maxIterations = 500; // 500 * 10ms = 5s maximum spin time
+    unsigned long sendTimeout = 10000; 
 
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
-        iterations++;
         
-        // The check that catches the modem state accumulation bug
-        // When modem internal TCP state is corrupted, write returns 0 immediately
+        // The check that catches the 2.7h bug
         if (ret == 0) {
             log_e("SSL Write returned 0 (Connection Closed/Stalled)");
-            // [FIX] Signal that modem state may be corrupted
-            // Caller should consider triggering modem hard reset
             return -1; 
         }
 
@@ -482,10 +512,8 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
             return handle_error(ret);
         }
 
-        // [FIX] Dual timeout protection: wall-clock time AND iteration count
-        // Prevents both slow stalls and fast-spinning busy loops
-        if (millis() - start > sendTimeout || iterations > maxIterations) {
-            log_e("SSL Write Timed Out (>5s or >%d iterations) - Force Close", maxIterations);
+        if (millis() - start > sendTimeout) {
+            log_e("SSL Write Timed Out (>10s) - Force Close");
             return -1;
         }
 
