@@ -459,11 +459,27 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
     unsigned long start = millis();
     unsigned long sendTimeout = 10000; 
 
+    // [DIAGNOSTIC] Check client state before write
+    Client *client = ssl_client->client;
+    if (!client) {
+        log_e("SSL Write: Client is NULL!");
+        return -1;
+    }
+    
+    // Log uptime and connection state for debugging 10000s issue
+    log_d("SSL Write: uptime=%lums, client=%p, connected=%d", 
+          millis(), client, client->connected());
+
     while ((ret = mbedtls_ssl_write(&ssl_client->ssl_ctx, data, len)) <= 0) {
         
         // The check that catches the 2.7h bug
         if (ret == 0) {
+            // [ENHANCED LOGGING] Print diagnostic info
             log_e("SSL Write returned 0 (Connection Closed/Stalled)");
+            log_e("  Uptime: %lu ms (%lu seconds)", millis(), millis()/1000);
+            log_e("  Client connected: %d", client ? client->connected() : -1);
+            log_e("  Client available: %d", client ? client->available() : -1);
+            log_e("  Data len: %d bytes", len);
             return -1; 
         }
 
@@ -474,6 +490,7 @@ int send_ssl_data(sslclient_context *ssl_client, const uint8_t *data, size_t len
 
         if (millis() - start > sendTimeout) {
             log_e("SSL Write Timed Out (>10s) - Force Close");
+            log_e("  Uptime: %lu ms", millis());
             return -1;
         }
 
